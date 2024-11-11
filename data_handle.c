@@ -9,6 +9,14 @@
 
 char const* HTTP_200_OK = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n";
 
+uint8_t hex_to_byte(char c) {
+	if ('0' <= c && c <= '9') return c - '0';
+	if ('a' <= c && c <= 'f') return c - 'a' + 10;
+	if ('A' <= c && c <= 'F') return c - 'A' + 10;
+	return -1;
+
+}
+
 typedef struct Reaction {
     char user[MAX_USERNAME_LENGTH];
     char message[MAX_MESSAGE_LENGTH];
@@ -31,19 +39,11 @@ int cur_size=10;
 Chat** chat_array=NULL;
 
 char* get_time(){
-    char* buffer;
+    char* buffer=malloc(50);
     time_t now = time(NULL);
-    if (now == (time_t)(-1)) {
-        snprintf(buffer, sizeof(buffer), "Error: time failed");
-        return buffer;
-    }
-    struct tm *tm_info;
+    struct tm *tm_info=(struct tm *)malloc(sizeof(struct tm));
     localtime_r(&now,tm_info);
-    if (tm_info == NULL) {
-        snprintf(buffer, sizeof(buffer), "Error: localtime failed");
-        return buffer;
-    }
-    strftime(buffer,sizeof(buffer),"%F %H:%M",tm_info);
+    strftime(buffer,50,"%F %H:%M:%S",tm_info);
     return buffer;
 }
 
@@ -65,14 +65,17 @@ int type_parser(char* path){
     return res;
 }
 
+
 uint8_t add_chat(char* username, char* message){
     int new_id=current_id+1;
+    current_id+=1;
     char* timestamp=get_time();
     Chat* new_chat=malloc(sizeof(Chat));
     new_chat->id=new_id;
     strncpy(new_chat->user,username,MAX_USERNAME_LENGTH);
     strncpy(new_chat->message,message,MAX_MESSAGE_LENGTH);
     strncpy(new_chat->timestamp,timestamp,50);
+    
     new_chat->num_reactions=0;
     
     chat_array=realloc(chat_array,(chat_cnt) * (sizeof(Chat*)));
@@ -84,7 +87,7 @@ uint8_t add_chat(char* username, char* message){
 uint8_t add_reaction(char* username, char* message, char* id){
  Chat* found_chat=NULL;
  for (int i=0; i<chat_cnt;i++){
-    if (chat_array[i]->id==atoi(id)){
+    if (chat_array[i]->id==(uint32_t)atoi(id)){
         found_chat=chat_array[i];
         break;
     }
@@ -106,7 +109,7 @@ void reset(){
     if (chat_array!=NULL){
         for (int i=0;i<chat_cnt;i++){
             if (chat_array[i]!=NULL){
-                for (int j=0;j<(chat_array[i]->num_reactions);j++){
+                for (int j=0;j<(int)(chat_array[i]->num_reactions);j++){
                     free(chat_array[i]->reactions_arr[j]);
                 }
             }
@@ -122,11 +125,10 @@ void respond_with_chat(int client){
     write(client, HTTP_200_OK, strlen(HTTP_200_OK));
     
     char buffer[512];
-    int num_written;
     for (int i=0; i<chat_cnt; i++){
         snprintf(buffer,512,"[#%d %s] %s: %s\n",chat_array[i]->id,chat_array[i]->timestamp,chat_array[i]->user,chat_array[i]->message);
         write(client, buffer, strlen(buffer));
-        for (int j=0; j<chat_array[i]->num_reactions;j++){
+        for (int j=0; j<(int)chat_array[i]->num_reactions;j++){
             snprintf(buffer, sizeof(buffer), "   (%s) %s\n", chat_array[i]->reactions_arr[j]->user, chat_array[i]->reactions_arr[j]->message);
             write(client,buffer,strlen(buffer));
         }
@@ -137,8 +139,8 @@ void handle_post(char* path, int client){
   
     char* user_str="user=";
     char* message_str="message=";
-    char* user_loc=strnstr(path,user_str,strlen(path));
-    char* message_loc=strnstr(path,message_str,strlen(path));
+    char* user_loc=strstr(path,user_str);
+    char* message_loc=strstr(path,message_str);
 
     char* username_start = user_loc + strlen(user_str);
     char* username_end = message_loc - 2;
@@ -162,9 +164,9 @@ void handle_reaction(char* path, int client){
     char* message_str="message=";
     char* id_str="id=";
 
-    char* user_loc=strnstr(path,user_str,strlen(path));
-    char* message_loc=strnstr(path,message_str,strlen(path));
-    char* id_loc=strnstr(path,id_str,strlen(path));
+    char* user_loc=strstr(path,user_str);
+    char* message_loc=strstr(path,message_str);
+    char* id_loc=strstr(path,id_str);
 
     char* username_start=user_loc+strlen(user_str);
     char* username_end=message_loc-2;
@@ -194,22 +196,44 @@ void handle_response(char *request, int client_socket) {
     char* firstSpace = strchr(request, ' '); 
     firstSpace+=1;
     char* secondSpace = strchr(firstSpace, ' ');
-    char* path=strncpy(path,firstSpace,secondSpace-firstSpace);
+    char* path=malloc(secondSpace-firstSpace+1);
+    strncpy(path,firstSpace,secondSpace-firstSpace);
     path[secondSpace-firstSpace]='\0';
+    char* path2=malloc(secondSpace-firstSpace+1);
+    int i=0;
+    int i_2=0;
+    while (*(path+i)!=0){
+        if (*(path+i)=='%'){
+            uint8_t a=hex_to_byte(*(path+i+1));
+            uint8_t b=hex_to_byte(*(path+i+2));
+            path2[i_2]=(unsigned char)((a<< 4)| b);
+            i_2++;
+            i+=2;
+        }else{
+            path2[i_2]=path[i];
+            i_2++;
+        }
+        i++;
 
-    int type= type_parser(path);
+    }
+
+    int type= type_parser(path2);
     if (type==1){
         respond_with_chat(client_socket);
     }else if(type==2){
-        handle_post(path,client_socket);
+        handle_post(path2,client_socket);
     }else if(type==3){
-        handle_reaction(path,client_socket);
+        handle_reaction(path2,client_socket);
     }else{
         reset();
     }
     
 }
 
-int main(int port) {
+int main(int argc, char* argv[]) {
+    int port=0;
+    if (argc>=2){
+        port=atoi(argv[1]);
+    }
     start_server(&handle_response, port);
 }
